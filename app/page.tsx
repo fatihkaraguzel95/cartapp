@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
 
@@ -8,10 +8,19 @@ export default function AuthPage() {
   const [tab, setTab] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const router = useRouter()
+
+  useEffect(() => {
+    const savedEmail = localStorage.getItem('cartapp-remember-email')
+    if (savedEmail) {
+      setEmail(savedEmail)
+      setRememberMe(true)
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -25,6 +34,11 @@ export default function AuthPage() {
       if (error) {
         setError('E-posta veya şifre hatalı')
       } else {
+        if (rememberMe) {
+          localStorage.setItem('cartapp-remember-email', email)
+        } else {
+          localStorage.removeItem('cartapp-remember-email')
+        }
         router.push('/dashboard')
         router.refresh()
       }
@@ -91,6 +105,22 @@ export default function AuthPage() {
             autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
             className="w-full bg-slate-800 text-white rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
           />
+
+          {tab === 'login' && (
+            <label className="flex items-center gap-3 px-1 cursor-pointer select-none">
+              <div
+                onClick={() => setRememberMe(!rememberMe)}
+                className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-all ${rememberMe ? 'bg-green-600' : 'bg-slate-700 border border-slate-600'}`}
+              >
+                {rememberMe && (
+                  <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </div>
+              <span onClick={() => setRememberMe(!rememberMe)} className="text-slate-400 text-sm">Beni hatırla</span>
+            </label>
+          )}
 
           {error && (
             <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3">
