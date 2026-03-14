@@ -29,8 +29,10 @@ export default function DashboardPage() {
   useEffect(() => {
     const init = async () => {
       const supabase = getSupabase()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/'); return }
+      // getSession() reads local cache — no network, works offline/background
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/'); return }
+      const user = session.user
       setUser(user)
       await loadLists(user.id)
       setLoading(false)

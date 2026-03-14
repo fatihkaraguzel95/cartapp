@@ -49,8 +49,10 @@ export default function ListPage() {
     let cleanup: (() => void) | undefined
 
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/'); return }
+      // getSession() reads local cache — no network, works on iOS PWA background
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/'); return }
+      const user = session.user
       setUser(user)
 
       const { data: listData } = await supabase

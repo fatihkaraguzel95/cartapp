@@ -4,6 +4,12 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'Alışveriş Listesi',
   description: 'Ortak alışveriş listesi - Gemeinsame Einkaufsliste',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Alışveriş',
+  },
 }
 
 export const viewport: Viewport = {
@@ -11,11 +17,18 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  themeColor: '#0f172a',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="tr">
+      <head>
+        <link rel="apple-touch-icon" href="/icon-192.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Alışveriş" />
+      </head>
       <body>{children}</body>
     </html>
   )
