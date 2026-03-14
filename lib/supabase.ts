@@ -1,23 +1,22 @@
-import { createBrowserClient } from '@supabase/ssr'
+import { createClient } from '@supabase/supabase-js'
 
-let client: ReturnType<typeof createBrowserClient> | null = null
+// createClient (supabase-js) uses localStorage — persists on Android PWA
+// createBrowserClient (ssr) uses cookies — gets cleared on Android standalone mode
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let client: ReturnType<typeof createClient<any>> | null = null
 
 export function getSupabase() {
   if (!client) {
-    client = createBrowserClient(
+    client = createClient<any>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
-        cookieOptions: {
-          // 1 yıl geçerli — iOS PWA oturumu kaybetmesin
-          maxAge: 60 * 60 * 24 * 365,
-          sameSite: 'lax',
-          secure: true,
-        },
         auth: {
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: false,
+          storageKey: 'cartapp-auth',
         },
       }
     )
