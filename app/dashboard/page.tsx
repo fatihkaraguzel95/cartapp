@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const [pwLoading, setPwLoading] = useState(false)
   const [pwError, setPwError] = useState('')
   const [pwSuccess, setPwSuccess] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const router = useRouter()
 
@@ -130,6 +131,13 @@ export default function DashboardPage() {
       }, 2000)
     }
     setPwLoading(false)
+  }
+
+  const deleteList = async (listId: string) => {
+    const supabase = getSupabase()
+    await supabase.from('shopping_lists').delete().eq('id', listId)
+    setLists(prev => prev.filter(l => l.id !== listId))
+    setConfirmDelete(null)
   }
 
   const signOut = async () => {
@@ -299,17 +307,49 @@ export default function DashboardPage() {
           <div className="space-y-3">
             <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Listeler ({lists.length})</h2>
             {lists.map(list => (
-              <button
-                key={list.id}
-                onClick={() => router.push(`/list/${list.id}`)}
-                className="w-full bg-slate-800 rounded-2xl p-4 text-left flex items-center justify-between active:scale-95 transition-all border border-slate-700"
-              >
-                <div>
-                  <div className="font-semibold text-white">{list.name}</div>
-                  <div className="text-slate-500 text-xs mt-1 font-mono">KOD: {list.join_code}</div>
-                </div>
-                <span className="text-slate-500 text-xl">›</span>
-              </button>
+              <div key={list.id} className="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden">
+                {confirmDelete === list.id ? (
+                  /* Silme onayı */
+                  <div className="p-4 flex items-center justify-between gap-3">
+                    <p className="text-sm text-red-300 font-medium">"{list.name}" silinsin mi?</p>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => deleteList(list.id)}
+                        className="bg-red-700 text-white text-xs font-bold px-3 py-2 rounded-xl active:scale-95"
+                      >
+                        Sil
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(null)}
+                        className="bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl active:scale-95"
+                      >
+                        İptal
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center">
+                    <button
+                      onClick={() => router.push(`/list/${list.id}`)}
+                      className="flex-1 p-4 text-left active:bg-slate-700 transition-all"
+                    >
+                      <div className="font-semibold text-white">{list.name}</div>
+                      <div className="text-slate-500 text-xs mt-1 font-mono">KOD: {list.join_code}</div>
+                    </button>
+                    {list.owner_id === user?.id && (
+                      <button
+                        onClick={() => setConfirmDelete(list.id)}
+                        className="px-4 py-4 text-slate-600 hover:text-red-400 transition-colors active:scale-95 text-lg flex-shrink-0"
+                      >
+                        🗑️
+                      </button>
+                    )}
+                    {list.owner_id !== user?.id && (
+                      <span className="px-4 text-slate-600 text-xl">›</span>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
