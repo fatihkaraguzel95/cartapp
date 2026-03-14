@@ -10,10 +10,20 @@ export default function DashboardPage() {
   const [lists, setLists] = useState<ShoppingList[]>([])
   const [showCreate, setShowCreate] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
+  const [showChangePassword, setShowChangePassword] = useState(false)
   const [listName, setListName] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+  const [pwLoading, setPwLoading] = useState(false)
+  const [pwError, setPwError] = useState('')
+  const [pwSuccess, setPwSuccess] = useState(false)
+
   const router = useRouter()
 
   useEffect(() => {
@@ -47,13 +57,9 @@ export default function DashboardPage() {
     const { data: list, error: listError } = await supabase
       .from('shopping_lists')
       .insert({ name: listName.trim(), join_code: code, owner_id: user.id })
-      .select()
-      .single()
+      .select().single()
 
-    if (listError || !list) {
-      setError('Liste oluşturulamadı. Tekrar deneyin.')
-      return
-    }
+    if (listError || !list) { setError('Liste oluşturulamadı.'); return }
 
     await supabase.from('list_members').insert({ list_id: list.id, user_id: user.id })
     setListName('')
@@ -72,23 +78,56 @@ export default function DashboardPage() {
       .eq('join_code', joinCode.trim().toUpperCase())
       .single()
 
-    if (error || !list) {
-      setError('Liste kodu bulunamadı')
-      return
-    }
+    if (error || !list) { setError('Liste kodu bulunamadı'); return }
 
     const { error: joinError } = await supabase
       .from('list_members')
       .insert({ list_id: list.id, user_id: user.id })
 
-    if (joinError && joinError.code !== '23505') {
-      setError('Listeye katılınamadı')
-      return
-    }
+    if (joinError && joinError.code !== '23505') { setError('Listeye katılınamadı'); return }
 
     setJoinCode('')
     setShowJoin(false)
     router.push(`/list/${list.id}`)
+  }
+
+  const changePassword = async () => {
+    setPwError('')
+    if (newPassword !== newPasswordConfirm) { setPwError('Yeni şifreler eşleşmiyor'); return }
+    if (newPassword.length < 6) { setPwError('Yeni şifre en az 6 karakter olmalı'); return }
+    if (!user?.email) return
+
+    setPwLoading(true)
+    const supabase = getSupabase()
+
+    // Verify current password
+    const { error: loginError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword,
+    })
+
+    if (loginError) {
+      setPwError('Mevcut şifre yanlış')
+      setPwLoading(false)
+      return
+    }
+
+    // Update password
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+
+    if (updateError) {
+      setPwError('Şifre güncellenemedi: ' + updateError.message)
+    } else {
+      setPwSuccess(true)
+      setCurrentPassword('')
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      setTimeout(() => {
+        setPwSuccess(false)
+        setShowChangePassword(false)
+      }, 2000)
+    }
+    setPwLoading(false)
   }
 
   const signOut = async () => {
@@ -110,20 +149,82 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="bg-slate-900 border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 z-10">
         <div>
-          <h1 className="font-bold text-lg flex items-center gap-2">
-            🛒 Listelerim
-          </h1>
+          <h1 className="font-bold text-lg">🛒 Listelerim</h1>
           <p className="text-slate-500 text-xs mt-0.5 truncate max-w-48">{user?.email}</p>
         </div>
-        <button
-          onClick={signOut}
-          className="text-slate-400 text-sm bg-slate-800 px-4 py-2 rounded-xl active:scale-95 transition-all"
-        >
-          Çıkış
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowChangePassword(!showChangePassword); setError(''); setPwError(''); setPwSuccess(false) }}
+            className="text-slate-400 text-sm bg-slate-800 px-3 py-2 rounded-xl active:scale-95 transition-all"
+            title="Şifre değiştir"
+          >
+            🔑
+          </button>
+          <button
+            onClick={signOut}
+            className="text-slate-400 text-sm bg-slate-800 px-4 py-2 rounded-xl active:scale-95 transition-all"
+          >
+            Çıkış
+          </button>
+        </div>
       </div>
 
       <div className="p-4 max-w-lg mx-auto">
+
+        {/* Password change panel */}
+        {showChangePassword && (
+          <div className="bg-slate-800 rounded-2xl p-4 mb-5 border border-slate-700">
+            <h3 className="font-semibold mb-3 flex items-center gap-2">🔑 Şifre Değiştir</h3>
+            <div className="space-y-3">
+              <input
+                type="password"
+                placeholder="Mevcut şifre"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                autoComplete="current-password"
+                className="w-full bg-slate-700 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
+              />
+              <input
+                type="password"
+                placeholder="Yeni şifre (en az 6 karakter)"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                className="w-full bg-slate-700 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
+              />
+              <input
+                type="password"
+                placeholder="Yeni şifre tekrar"
+                value={newPasswordConfirm}
+                onChange={(e) => setNewPasswordConfirm(e.target.value)}
+                autoComplete="new-password"
+                className="w-full bg-slate-700 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
+              />
+              {pwError && (
+                <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-3 py-2">{pwError}</div>
+              )}
+              {pwSuccess && (
+                <div className="bg-green-950 border border-green-700 text-green-300 text-sm rounded-xl px-3 py-2">✓ Şifre başarıyla değiştirildi!</div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={changePassword}
+                  disabled={pwLoading || !currentPassword || !newPassword || !newPasswordConfirm}
+                  className="flex-1 bg-green-600 disabled:opacity-50 py-3 rounded-xl text-sm font-bold active:scale-95"
+                >
+                  {pwLoading ? '...' : 'Değiştir'}
+                </button>
+                <button
+                  onClick={() => { setShowChangePassword(false); setPwError(''); setCurrentPassword(''); setNewPassword(''); setNewPasswordConfirm('') }}
+                  className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95"
+                >
+                  İptal
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Action buttons */}
         <div className="grid grid-cols-2 gap-3 mb-5">
           <button
@@ -154,12 +255,8 @@ export default function DashboardPage() {
               autoFocus
             />
             <div className="flex gap-2">
-              <button onClick={createList} className="flex-1 bg-green-600 py-3 rounded-xl text-sm font-bold active:scale-95">
-                Oluştur
-              </button>
-              <button onClick={() => setShowCreate(false)} className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95">
-                İptal
-              </button>
+              <button onClick={createList} className="flex-1 bg-green-600 py-3 rounded-xl text-sm font-bold active:scale-95">Oluştur</button>
+              <button onClick={() => setShowCreate(false)} className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95">İptal</button>
             </div>
           </div>
         )}
@@ -179,20 +276,14 @@ export default function DashboardPage() {
               maxLength={6}
             />
             <div className="flex gap-2">
-              <button onClick={joinList} className="flex-1 bg-green-600 py-3 rounded-xl text-sm font-bold active:scale-95">
-                Katıl
-              </button>
-              <button onClick={() => setShowJoin(false)} className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95">
-                İptal
-              </button>
+              <button onClick={joinList} className="flex-1 bg-green-600 py-3 rounded-xl text-sm font-bold active:scale-95">Katıl</button>
+              <button onClick={() => setShowJoin(false)} className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95">İptal</button>
             </div>
           </div>
         )}
 
         {error && (
-          <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3 mb-4">
-            {error}
-          </div>
+          <div className="bg-red-950 border border-red-800 text-red-300 text-sm rounded-xl px-4 py-3 mb-4">{error}</div>
         )}
 
         {/* Lists */}
@@ -209,7 +300,7 @@ export default function DashboardPage() {
               <button
                 key={list.id}
                 onClick={() => router.push(`/list/${list.id}`)}
-                className="w-full bg-slate-800 hover:bg-slate-750 rounded-2xl p-4 text-left flex items-center justify-between active:scale-95 transition-all border border-slate-700"
+                className="w-full bg-slate-800 rounded-2xl p-4 text-left flex items-center justify-between active:scale-95 transition-all border border-slate-700"
               >
                 <div>
                   <div className="font-semibold text-white">{list.name}</div>

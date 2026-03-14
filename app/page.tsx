@@ -5,20 +5,22 @@ import { useRouter } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
 
 export default function AuthPage() {
-  const [isLogin, setIsLogin] = useState(true)
+  const [tab, setTab] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const router = useRouter()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError('')
+    setInfo('')
     const supabase = getSupabase()
 
-    if (isLogin) {
+    if (tab === 'login') {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) {
         setError('E-posta veya şifre hatalı')
@@ -36,7 +38,8 @@ export default function AuthPage() {
           router.push('/dashboard')
           router.refresh()
         } else {
-          setError('Kayıt başarılı! Lütfen e-postanızı doğrulayın.')
+          setInfo('Kayıt başarılı! Şimdi giriş yapabilirsiniz.')
+          setTab('login')
         }
       }
     }
@@ -46,7 +49,6 @@ export default function AuthPage() {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="text-center mb-10">
           <div className="text-7xl mb-4">🛒</div>
           <h1 className="text-3xl font-bold text-white">Alışveriş</h1>
@@ -54,27 +56,21 @@ export default function AuthPage() {
           <p className="text-slate-500 text-sm mt-2">Gemeinsame Einkaufsliste</p>
         </div>
 
-        {/* Tabs */}
         <div className="flex bg-slate-800 rounded-2xl p-1 mb-6">
           <button
-            onClick={() => { setIsLogin(true); setError('') }}
-            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${
-              isLogin ? 'bg-green-600 text-white' : 'text-slate-400'
-            }`}
+            onClick={() => { setTab('login'); setError(''); setInfo('') }}
+            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${tab === 'login' ? 'bg-green-600 text-white' : 'text-slate-400'}`}
           >
             Giriş Yap
           </button>
           <button
-            onClick={() => { setIsLogin(false); setError('') }}
-            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${
-              !isLogin ? 'bg-green-600 text-white' : 'text-slate-400'
-            }`}
+            onClick={() => { setTab('register'); setError(''); setInfo('') }}
+            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${tab === 'register' ? 'bg-green-600 text-white' : 'text-slate-400'}`}
           >
             Kayıt Ol
           </button>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-3">
           <input
             type="email"
@@ -92,7 +88,7 @@ export default function AuthPage() {
             onChange={(e) => setPassword(e.target.value)}
             required
             minLength={6}
-            autoComplete={isLogin ? 'current-password' : 'new-password'}
+            autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
             className="w-full bg-slate-800 text-white rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
           />
 
@@ -101,13 +97,18 @@ export default function AuthPage() {
               {error}
             </div>
           )}
+          {info && (
+            <div className="bg-green-950 border border-green-800 text-green-300 text-sm rounded-xl px-4 py-3">
+              {info}
+            </div>
+          )}
 
           <button
             type="submit"
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-bold rounded-2xl py-4 text-base transition-all active:scale-95"
           >
-            {loading ? '...' : isLogin ? 'Giriş Yap' : 'Kayıt Ol'}
+            {loading ? '...' : tab === 'login' ? 'Giriş Yap' : 'Kayıt Ol'}
           </button>
         </form>
       </div>
