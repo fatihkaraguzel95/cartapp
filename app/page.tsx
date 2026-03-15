@@ -9,18 +9,35 @@ export default function AuthPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [rememberMe, setRememberMe] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const router = useRouter()
 
   useEffect(() => {
-    const savedEmail = localStorage.getItem('cartapp-remember-email')
-    if (savedEmail) {
-      setEmail(savedEmail)
-      setRememberMe(true)
+    const init = async () => {
+      // Aktif oturum varsa direkt dashboard'a gönder
+      const supabase = getSupabase()
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        router.replace('/dashboard')
+        return
+      }
+
+      // Kayıtlı bilgileri yükle
+      const savedEmail = localStorage.getItem('cartapp-remember-email')
+      const savedPassword = localStorage.getItem('cartapp-remember-password')
+      if (savedEmail) {
+        setEmail(savedEmail)
+        setRememberMe(true)
+      }
+      if (savedPassword) {
+        setPassword(savedPassword)
+      }
+      setLoading(false)
     }
-  }, [])
+    init()
+  }, [router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -33,11 +50,14 @@ export default function AuthPage() {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) {
         setError('E-posta veya şifre hatalı')
+        setLoading(false)
       } else {
         if (rememberMe) {
           localStorage.setItem('cartapp-remember-email', email)
+          localStorage.setItem('cartapp-remember-password', password)
         } else {
           localStorage.removeItem('cartapp-remember-email')
+          localStorage.removeItem('cartapp-remember-password')
         }
         router.push('/dashboard')
         router.refresh()
@@ -46,6 +66,7 @@ export default function AuthPage() {
       const { error } = await supabase.auth.signUp({ email, password })
       if (error) {
         setError(error.message === 'User already registered' ? 'Bu e-posta zaten kayıtlı' : error.message)
+        setLoading(false)
       } else {
         const { error: loginError } = await supabase.auth.signInWithPassword({ email, password })
         if (!loginError) {
@@ -54,10 +75,18 @@ export default function AuthPage() {
         } else {
           setInfo('Kayıt başarılı! Şimdi giriş yapabilirsiniz.')
           setTab('login')
+          setLoading(false)
         }
       }
     }
-    setLoading(false)
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="text-slate-400 text-lg">Yükleniyor...</div>
+      </div>
+    )
   }
 
   return (
@@ -118,7 +147,7 @@ export default function AuthPage() {
                   </svg>
                 )}
               </div>
-              <span onClick={() => setRememberMe(!rememberMe)} className="text-slate-400 text-sm">Beni hatırla</span>
+              <span onClick={() => setRememberMe(!rememberMe)} className="text-slate-400 text-sm">Beni hatırla (e-posta ve şifre)</span>
             </label>
           )}
 
