@@ -1,0 +1,85 @@
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Create deployment archive
+        run: |
+          tar -czf deploy.tar.gz \
+            .next/standalone \
+            .next/static \
+            public \
+            Dockerfile \
+            package.json \
+            package-lock.json
+
+      - name: Upload archive to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: deploy.tar.gz
+          target: /opt/cartapp-deploy/
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+
+            # Arşivi aç
+            mkdir -p /opt/cartapp-new
+            tar -xzf /opt/cartapp-deploy/deploy.tar.gz -C /opt/cartapp-new
+
+            # Dockerfile'ı kopyala ve image oluştur
+            cd /opt/cartapp-new
+            docker build -t cartapp:latest .
+
+            # Eski container'ı durdur ve sil
+            docker stop cartapp 2>/dev/null || true
+            docker rm cartapp 2>/dev/null || true
+
+            # Yeni container'ı başlat
+            docker run -d \
+              --name cartapp \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }} \
+              -e NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }} \
+              cartapp:latest
+
+            # Temizlik
+            rm -rf /opt/cartapp-new /opt/cartapp-deploy/deploy.tar.gz
+            docker image prune -f
+
+            echo "Deploy tamamlandi: $(date)"
