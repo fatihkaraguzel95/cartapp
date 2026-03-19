@@ -29,31 +29,12 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-      - name: Create deployment Dockerfile
-        run: |
-          cat > Dockerfile.deploy << 'EOF'
-          FROM node:20-alpine
-          WORKDIR /app
-          ENV NODE_ENV=production
-          RUN addgroup --system --gid 1001 nodejs
-          RUN adduser --system --uid 1001 nextjs
-          COPY public ./public
-          COPY .next/standalone ./
-          COPY .next/static ./.next/static
-          USER nextjs
-          EXPOSE 3000
-          ENV PORT=3000
-          ENV HOSTNAME="0.0.0.0"
-          CMD ["node", "server.js"]
-          EOF
-
       - name: Create deployment archive
         run: |
           tar -czf deploy.tar.gz \
             .next/standalone \
             .next/static \
-            public \
-            Dockerfile.deploy
+            public
 
       - name: Upload archive to server
         uses: appleboy/scp-action@v0.1.7
@@ -73,29 +54,36 @@ jobs:
           script: |
             set -e
 
-            # Arşivi aç
             mkdir -p /opt/cartapp-new
             tar -xzf /opt/cartapp-deploy/deploy.tar.gz -C /opt/cartapp-new
 
-            # Pre-built artifact'tan image oluştur (build yok)
+            cat > /opt/cartapp-new/Dockerfile.deploy << 'EOF'
+            FROM node:20-alpine
+            WORKDIR /app
+            ENV NODE_ENV=production
+            RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
+            COPY public ./public
+            COPY .next/standalone ./
+            COPY .next/static ./.next/static
+            USER nextjs
+            EXPOSE 3000
+            ENV PORT=3000
+            ENV HOSTNAME="0.0.0.0"
+            CMD ["node", "server.js"]
+            EOF
+
             cd /opt/cartapp-new
             docker build -t cartapp:latest -f Dockerfile.deploy .
 
-            # Eski container'ı durdur ve sil
             docker stop cartapp 2>/dev/null || true
             docker rm cartapp 2>/dev/null || true
 
-            # Yeni container'ı başlat
             docker run -d \
               --name cartapp \
               --restart unless-stopped \
               -p 3000:3000 \
-              -e NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }} \
-              -e NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }} \
               cartapp:latest
 
-            # Temizlik
             rm -rf /opt/cartapp-new /opt/cartapp-deploy/deploy.tar.gz
             docker image prune -f
-
             echo "Deploy tamamlandi: $(date)"
