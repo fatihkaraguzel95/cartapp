@@ -136,3 +136,12 @@ CREATE POLICY "items_delete" ON public.list_items
 -- ============================================================
 ALTER PUBLICATION supabase_realtime ADD TABLE public.list_items;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.list_members;
+
+-- ============================================================
+-- Migration: quantity & unit on list_items
+-- Run these if upgrading an existing DB:
+-- ALTER TABLE public.list_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1;
+-- ALTER TABLE public.list_items ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT 'adet';
+-- ============================================================
+ALTER TABLE public.list_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE public.list_items ADD COLUMN IF NOT EXISTS unit TEXT NOT NULL DEFAULT 'adet';

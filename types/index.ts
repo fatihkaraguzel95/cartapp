@@ -21,6 +21,8 @@ export interface ListItem {
   product_id: string
   added_by: string
   added_at: string
+  quantity: number
+  unit: string
 }
 
 export interface ListMember {

@@ -6,15 +6,31 @@ import { getSupabase } from '@/lib/supabase'
 import { Product, ShoppingList, ListItem } from '@/types'
 
 const EMOJIS = [
-  '🍎','🍌','🍊','🍋','🍇','🍓','🫐','🍑','🍒','🍐','🥭','🍍','🥝','🥑','🍅',
-  '🥦','🥕','🧅','🧄','🥔','🌽','🫑','🥒','🍆','🥬','🌿','🍄','🫘','🌶',
-  '🥩','🍗','🍖','🥚','🧀','🥛','🧈','🍞','🥖','🫓',
-  '🐟','🦐','🫒','🥜','🌾',
-  '☕','🍵','🥤','💧','🍺','🍷','🧃',
-  '🍫','🍪','🍯','🥐','🍕','🌭','🥗',
-  '🧴','🧺','🧻','🪥','🧼','🪒','🗑️','🛍️',
-  '🔋','💊','🧹','📦','🫙','🥫','🌱',
+  // Meyveler
+  '🍎','🍏','🍌','🍊','🍋','🍇','🍓','🫐','🍑','🍒','🍐','🥭','🍍','🥝','🥑','🍅','🍉','🍈',
+  // Sebzeler
+  '🥦','🥕','🧅','🧄','🥔','🌽','🫑','🥒','🍆','🥬','🌿','🍄','🫘','🌶','🥜','🫚','🧂',
+  // Et / Balık / Deniz Ürünleri
+  '🥩','🍗','🍖','🥓','🥚','🍳','🐟','🦐','🦞','🦀','🦑','🐙',
+  // Süt & Kahvaltılık
+  '🧀','🥛','🧈','🍯','🥚',
+  // Ekmek & Tahıllar
+  '🍞','🥖','🫓','🥐','🥨','🥯','🌾','🫙','🥫',
+  // İçecekler
+  '☕','🍵','🥤','💧','🍺','🍷','🧃','🧋','🍹','🥂','🫖','🍶','🥃','🧉',
+  // Atıştırmalık & Tatlı
+  '🍫','🍪','🍿','🍰','🧁','🍦','🍧','🍮','🥧','🍩','🍬','🍭',
+  // Hazır & Pişmiş
+  '🍕','🌭','🥗','🧆','🌮','🥙','🫕','🥣','🍱','🥘','🍲','🥚',
+  // Dondurulmuş & Diğer Gıda
+  '🧊','🫙','📦',
+  // Temizlik & Ev
+  '🧴','🧺','🧻','🪥','🧼','🪒','🧽','🪣','🫧','🚿','🗑️','🛍️',
+  // Diğer
+  '🔋','💊','🧹','🌱','🛒','🏪','🪴','📦','🏷️',
 ]
+
+const UNITS = ['adet', 'paket', 'kutu', 'kg', 'g', '100g', '250g', '500g', 'litre', 'ml', 'şişe', 'demet', 'dilim', 'tane', 'çift']
 
 export default function ListPage() {
   const params = useParams()
@@ -40,6 +56,15 @@ export default function ListPage() {
   const [customEmoji, setCustomEmoji] = useState('🛒')
   const [addingCustom, setAddingCustom] = useState(false)
 
+  // Quantity/unit modal
+  const [pendingProduct, setPendingProduct] = useState<Product | null>(null)
+  const [selectedQuantity, setSelectedQuantity] = useState(1)
+  const [selectedUnit, setSelectedUnit] = useState('adet')
+
+  const getCartItem = useCallback((productId: string) => {
+    return cartItems.find(item => item.product_id === productId) ?? null
+  }, [cartItems])
+
   const inCart = useCallback((productId: string) => {
     return cartItems.some(item => item.product_id === productId)
   }, [cartItems])
@@ -49,7 +74,6 @@ export default function ListPage() {
     let cleanup: (() => void) | undefined
 
     const init = async () => {
-      // getSession() reads local cache — no network, works on iOS PWA background
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/'); return }
       const user = session.user
@@ -111,21 +135,43 @@ export default function ListPage() {
     setSearchResults(results)
   }, [searchQuery, allProducts])
 
-  const toggleProduct = async (product: Product) => {
+  const handleTileClick = (product: Product) => {
     if (toggling) return
+    if (inCart(product.id)) {
+      // Remove from cart directly
+      removeProduct(product)
+    } else {
+      // Open quantity picker
+      setSelectedQuantity(1)
+      setSelectedUnit('adet')
+      setPendingProduct(product)
+    }
+  }
+
+  const removeProduct = async (product: Product) => {
     setToggling(product.id)
     const supabase = getSupabase()
+    await supabase.from('list_items').delete()
+      .eq('list_id', listId).eq('product_id', product.id)
+    setCartItems(prev => prev.filter(item => item.product_id !== product.id))
+    setToggling(null)
+  }
 
-    if (inCart(product.id)) {
-      await supabase.from('list_items').delete()
-        .eq('list_id', listId).eq('product_id', product.id)
-      setCartItems(prev => prev.filter(item => item.product_id !== product.id))
-    } else {
-      const { data } = await supabase.from('list_items')
-        .insert({ list_id: listId, product_id: product.id, added_by: user!.id })
-        .select().single()
-      if (data) setCartItems(prev => [...prev, data])
-    }
+  const confirmAddToCart = async () => {
+    if (!pendingProduct || !user) return
+    setToggling(pendingProduct.id)
+    const supabase = getSupabase()
+    const { data } = await supabase.from('list_items')
+      .insert({
+        list_id: listId,
+        product_id: pendingProduct.id,
+        added_by: user.id,
+        quantity: selectedQuantity,
+        unit: selectedUnit,
+      })
+      .select().single()
+    if (data) setCartItems(prev => [...prev, data])
+    setPendingProduct(null)
     setToggling(null)
   }
 
@@ -134,7 +180,6 @@ export default function ListPage() {
     setAddingCustom(true)
     const supabase = getSupabase()
 
-    // Insert into products table (permanent)
     const { data: product, error } = await supabase
       .from('products')
       .insert({
@@ -152,21 +197,18 @@ export default function ListPage() {
       return
     }
 
-    // Add to local products list immediately
     setAllProducts(prev => [...prev, product])
 
-    // Add to cart
-    const { data: item } = await supabase
-      .from('list_items')
-      .insert({ list_id: listId, product_id: product.id, added_by: user.id })
-      .select().single()
-    if (item) setCartItems(prev => [...prev, item])
-
+    // Open quantity picker for the custom product too
     setCustomName('')
     setCustomNameDe('')
     setCustomEmoji('🛒')
     setShowAddModal(false)
     setAddingCustom(false)
+
+    setSelectedQuantity(1)
+    setSelectedUnit('adet')
+    setPendingProduct(product)
   }
 
   const copyCode = async () => {
@@ -190,6 +232,33 @@ export default function ListPage() {
 
   const isSearching = searchQuery.trim().length > 0
 
+  const ProductTile = ({ product }: { product: Product }) => {
+    const cartItem = getCartItem(product.id)
+    const isInCart = !!cartItem
+    return (
+      <button
+        onClick={() => handleTileClick(product)}
+        disabled={toggling === product.id}
+        className={`rounded-2xl p-4 text-center flex flex-col items-center gap-2 transition-all border-2 active:scale-95 disabled:opacity-70 ${
+          isInCart ? 'bg-green-950 border-green-600' : 'bg-slate-800 border-slate-700'
+        }`}
+      >
+        <span className="text-5xl leading-none">{product.emoji}</span>
+        <div className="w-full">
+          <div className="font-semibold text-sm leading-tight">{product.name_tr}</div>
+          <div className="text-slate-400 text-xs mt-0.5">{product.name_de}</div>
+        </div>
+        {isInCart ? (
+          <span className="text-xs bg-green-600 text-white px-2.5 py-0.5 rounded-full font-medium">
+            ✓ {cartItem.quantity} {cartItem.unit}
+          </span>
+        ) : (
+          <span className="text-xs bg-slate-700 text-slate-300 px-2.5 py-0.5 rounded-full">+ Ekle</span>
+        )}
+      </button>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white pb-10">
       {/* Header */}
@@ -208,7 +277,6 @@ export default function ListPage() {
               <span className="text-xs text-slate-500">👥 {memberCount} kişi</span>
             </div>
           </div>
-          {/* Add custom product button */}
           <button
             onClick={() => setShowAddModal(true)}
             className="bg-green-700 text-white rounded-xl px-3 py-2 text-sm font-bold flex-shrink-0 active:scale-95 transition-all"
@@ -262,29 +330,7 @@ export default function ListPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {searchResults.map(product => {
-                  const isInCart = inCart(product.id)
-                  return (
-                    <button
-                      key={product.id}
-                      onClick={() => toggleProduct(product)}
-                      disabled={toggling === product.id}
-                      className={`rounded-2xl p-4 text-center flex flex-col items-center gap-2 transition-all border-2 active:scale-95 disabled:opacity-70 ${
-                        isInCart ? 'bg-green-950 border-green-600' : 'bg-red-950 border-red-900'
-                      }`}
-                    >
-                      <span className="text-5xl leading-none">{product.emoji}</span>
-                      <div className="w-full">
-                        <div className="font-semibold text-sm leading-tight">{product.name_tr}</div>
-                        <div className="text-slate-400 text-xs mt-0.5">{product.name_de}</div>
-                      </div>
-                      {isInCart
-                        ? <span className="text-xs bg-green-600 text-white px-2.5 py-0.5 rounded-full font-medium">✓ Sepette</span>
-                        : <span className="text-xs bg-red-900 text-red-300 px-2.5 py-0.5 rounded-full">+ Ekle</span>
-                      }
-                    </button>
-                  )
-                })}
+                {searchResults.map(product => <ProductTile key={product.id} product={product} />)}
               </div>
             )}
           </>
@@ -326,26 +372,84 @@ export default function ListPage() {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {cartProducts.map(product => (
-                  <button
-                    key={product.id}
-                    onClick={() => toggleProduct(product)}
-                    disabled={toggling === product.id}
-                    className="bg-green-950 border-2 border-green-600 rounded-2xl p-4 text-center flex flex-col items-center gap-2 active:scale-95 transition-all disabled:opacity-70"
-                  >
-                    <span className="text-5xl leading-none">{product.emoji}</span>
-                    <div className="w-full">
-                      <div className="font-semibold text-sm leading-tight">{product.name_tr}</div>
-                      <div className="text-slate-400 text-xs mt-0.5">{product.name_de}</div>
-                    </div>
-                    <span className="text-xs bg-green-600 text-white px-2.5 py-0.5 rounded-full font-medium">✓ Sepette</span>
-                  </button>
-                ))}
+                {cartProducts.map(product => <ProductTile key={product.id} product={product} />)}
               </div>
             )}
           </>
         )}
       </div>
+
+      {/* Quantity/Unit Picker Modal */}
+      {pendingProduct && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center" onClick={() => setPendingProduct(null)}>
+          <div
+            className="bg-slate-900 rounded-t-3xl w-full max-w-lg p-5 pb-8"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Product info */}
+            <div className="flex items-center gap-3 mb-5">
+              <span className="text-5xl">{pendingProduct.emoji}</span>
+              <div>
+                <div className="font-bold text-base">{pendingProduct.name_tr}</div>
+                <div className="text-slate-400 text-sm">{pendingProduct.name_de}</div>
+              </div>
+              <button onClick={() => setPendingProduct(null)} className="ml-auto text-slate-400 text-2xl w-8 h-8 flex items-center justify-center">×</button>
+            </div>
+
+            {/* Quantity stepper */}
+            <div className="mb-4">
+              <p className="text-slate-400 text-xs mb-2 font-medium uppercase tracking-wider">Miktar</p>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setSelectedQuantity(q => Math.max(1, q - 1))}
+                  className="w-12 h-12 rounded-2xl bg-slate-800 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all"
+                >−</button>
+                <span className="text-3xl font-bold w-12 text-center">{selectedQuantity}</span>
+                <button
+                  onClick={() => setSelectedQuantity(q => Math.min(99, q + 1))}
+                  className="w-12 h-12 rounded-2xl bg-slate-800 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all"
+                >+</button>
+                {/* Quick quantity chips */}
+                <div className="flex gap-2 flex-wrap ml-2">
+                  {[1, 2, 3, 5, 10].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => setSelectedQuantity(n)}
+                      className={`px-3 py-1.5 rounded-xl text-sm font-semibold transition-all active:scale-90 ${
+                        selectedQuantity === n ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300'
+                      }`}
+                    >{n}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Unit selector */}
+            <div className="mb-5">
+              <p className="text-slate-400 text-xs mb-2 font-medium uppercase tracking-wider">Birim</p>
+              <div className="flex flex-wrap gap-2">
+                {UNITS.map(unit => (
+                  <button
+                    key={unit}
+                    onClick={() => setSelectedUnit(unit)}
+                    className={`px-3.5 py-2 rounded-xl text-sm font-semibold transition-all active:scale-90 ${
+                      selectedUnit === unit ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >{unit}</button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={confirmAddToCart}
+              disabled={!!toggling}
+              className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-bold rounded-2xl py-4 active:scale-95 transition-all text-base"
+            >
+              {toggling ? '...' : `🛒 ${selectedQuantity} ${selectedUnit} sepete ekle`}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Custom Product Modal */}
       {showAddModal && (
@@ -364,7 +468,7 @@ export default function ListPage() {
               <p className="text-slate-400 text-xs mb-2 font-medium">Simge Seç</p>
               <div className="flex items-center gap-3 mb-2">
                 <span className="text-5xl">{customEmoji}</span>
-                <div className="flex-1 bg-slate-800 rounded-xl p-2 max-h-32 overflow-y-auto">
+                <div className="flex-1 bg-slate-800 rounded-xl p-2 max-h-36 overflow-y-auto">
                   <div className="grid grid-cols-8 gap-1">
                     {EMOJIS.map(e => (
                       <button
@@ -406,7 +510,7 @@ export default function ListPage() {
               disabled={!customName.trim() || addingCustom}
               className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-bold rounded-2xl py-4 active:scale-95 transition-all"
             >
-              {addingCustom ? '...' : `${customEmoji} Ekle ve Sepete At`}
+              {addingCustom ? '...' : `${customEmoji} Devam Et →`}
             </button>
           </div>
         </div>
