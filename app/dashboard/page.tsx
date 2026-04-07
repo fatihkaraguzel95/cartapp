@@ -34,6 +34,8 @@ export default function DashboardPage() {
   const [pwError, setPwError] = useState('')                      // Şifre değiştirme hatası
   const [pwSuccess, setPwSuccess] = useState(false)               // Şifre başarıyla değişti mi?
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null) // Silinecek listenin ID'si (onay için)
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false) // Hesap silme onayı
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
 
   const router = useRouter()
 
@@ -178,6 +180,29 @@ export default function DashboardPage() {
     setConfirmDelete(null) // Onay modunu kapat
   }
 
+  // --- HESABI SİL ---
+  const deleteAccount = async () => {
+    setDeleteAccountLoading(true)
+    const supabase = getSupabase()
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { router.push('/'); return }
+
+    const res = await fetch('/api/delete-account', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    })
+
+    if (res.ok) {
+      await supabase.auth.signOut()
+      router.push('/')
+    } else {
+      const data = await res.json()
+      setError('Hesap silinemedi: ' + data.error)
+      setDeleteAccountLoading(false)
+      setShowDeleteAccount(false)
+    }
+  }
+
   // --- ÇIKIŞ YAP ---
   const signOut = async () => {
     const supabase = getSupabase()
@@ -212,6 +237,14 @@ export default function DashboardPage() {
             title="Şifre değiştir"
           >
             🔑
+          </button>
+          {/* Hesap sil butonu */}
+          <button
+            onClick={() => setShowDeleteAccount(true)}
+            className="text-red-500 text-sm bg-slate-800 px-3 py-2 rounded-xl active:scale-95 transition-all"
+            title="Hesabı sil"
+          >
+            🗑️
           </button>
           {/* Çıkış butonu */}
           <button
@@ -271,6 +304,33 @@ export default function DashboardPage() {
                 </button>
                 <button
                   onClick={() => { setShowChangePassword(false); setPwError(''); setCurrentPassword(''); setNewPassword(''); setNewPasswordConfirm('') }}
+                  className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95"
+                >
+                  İptal
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hesap silme onay modalı */}
+        {showDeleteAccount && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+            <div className="bg-slate-800 rounded-2xl p-5 w-full max-w-sm border border-red-900">
+              <h3 className="font-bold text-red-400 mb-2">⚠️ Hesabı Sil</h3>
+              <p className="text-slate-300 text-sm mb-4">
+                Hesabınız ve tüm listeleriniz kalıcı olarak silinecek. Bu işlem geri alınamaz.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={deleteAccount}
+                  disabled={deleteAccountLoading}
+                  className="flex-1 bg-red-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl text-sm active:scale-95"
+                >
+                  {deleteAccountLoading ? '...' : 'Evet, Sil'}
+                </button>
+                <button
+                  onClick={() => setShowDeleteAccount(false)}
                   className="flex-1 bg-slate-700 py-3 rounded-xl text-sm active:scale-95"
                 >
                   İptal

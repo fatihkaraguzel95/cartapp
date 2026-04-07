@@ -16,13 +16,13 @@ export default function AuthPage() {
   // --- STATE (Durum Değişkenleri) ---
   // useState ile tanımlanan değişkenler değiştiğinde ekran otomatik yenilenir.
 
-  const [tab, setTab] = useState<'login' | 'register'>('login') // Aktif sekme: "giriş yap" mı "kayıt ol" mu
-  const [email, setEmail] = useState('')         // E-posta alanındaki metin
-  const [password, setPassword] = useState('')   // Şifre alanındaki metin
-  const [rememberMe, setRememberMe] = useState(false) // "Beni hatırla" kutucuğu işaretli mi?
-  const [loading, setLoading] = useState(true)   // Yükleniyor animasyonu gösterilsin mi?
-  const [error, setError] = useState('')         // Hata mesajı (yanlış şifre vb.)
-  const [info, setInfo] = useState('')           // Bilgi mesajı (kayıt başarılı vb.)
+  const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const router = useRouter()                     // Sayfa yönlendirme için Next.js hook'u
 
   // --- SAYFA YÜKLENDİĞİNDE ÇALIŞIR ---
@@ -89,6 +89,17 @@ export default function AuthPage() {
         router.push('/dashboard')
         router.refresh() // Sayfanın yeni oturumu tanıması için yenile
       }
+    } else if (tab === 'forgot') {
+      // --- ŞİFREMİ UNUTTUM ---
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      if (error) {
+        setError('İstek gönderilemedi: ' + error.message)
+      } else {
+        setInfo('Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.')
+      }
+      setLoading(false)
     } else {
       // --- KAYIT OL ---
       const { error } = await supabase.auth.signUp({ email, password })
@@ -137,7 +148,7 @@ export default function AuthPage() {
           <p className="text-slate-500 text-sm mt-2">Gemeinsame Einkaufsliste</p>
         </div>
 
-        {/* Sekme seçici: "Giriş Yap" / "Kayıt Ol" */}
+        {/* Sekme seçici */}
         <div className="flex bg-slate-800 rounded-2xl p-1 mb-6">
           <button
             onClick={() => { setTab('login'); setError(''); setInfo('') }}
@@ -150,6 +161,12 @@ export default function AuthPage() {
             className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${tab === 'register' ? 'bg-green-600 text-white' : 'text-slate-400'}`}
           >
             Kayıt Ol
+          </button>
+          <button
+            onClick={() => { setTab('forgot'); setError(''); setInfo('') }}
+            className={`flex-1 py-3 rounded-xl text-sm font-semibold transition-all ${tab === 'forgot' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}
+          >
+            Unuttum
           </button>
         </div>
 
@@ -167,17 +184,19 @@ export default function AuthPage() {
             className="w-full bg-slate-800 text-white rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
           />
 
-          {/* Şifre alanı */}
-          <input
-            type="password"
-            placeholder="Şifre (en az 6 karakter)"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-            autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
-            className="w-full bg-slate-800 text-white rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
-          />
+          {/* Şifre alanı — "Unuttum" sekmesinde gösterme */}
+          {tab !== 'forgot' && (
+            <input
+              type="password"
+              placeholder="Şifre (en az 6 karakter)"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={6}
+              autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+              className="w-full bg-slate-800 text-white rounded-2xl px-5 py-4 outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
+            />
+          )}
 
           {/* "Beni Hatırla" — sadece giriş sekmesinde göster */}
           {tab === 'login' && (
@@ -219,7 +238,7 @@ export default function AuthPage() {
             className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-bold rounded-2xl py-4 text-base transition-all active:scale-95"
           >
             {/* Yükleniyorsa "..." göster, değilse sekmeye göre buton metni */}
-            {loading ? '...' : tab === 'login' ? 'Giriş Yap' : 'Kayıt Ol'}
+            {loading ? '...' : tab === 'login' ? 'Giriş Yap' : tab === 'register' ? 'Kayıt Ol' : 'Bağlantı Gönder'}
           </button>
         </form>
       </div>
