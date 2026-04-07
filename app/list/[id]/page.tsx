@@ -216,7 +216,7 @@ export default function ListPage() {
     const supabase = getSupabase()
 
     // Veritabanına ekle: liste ID, ürün ID, kimin eklediği, miktar, birim
-    const { data } = await supabase.from('list_items')
+    const { data, error } = await supabase.from('list_items')
       .insert({
         list_id: listId,
         product_id: pendingProduct.id,
@@ -226,6 +226,7 @@ export default function ListPage() {
       })
       .select().single() // Eklenen kaydı geri al
 
+    if (error) alert('Hata: ' + error.message + ' | ' + error.code)
     if (data) setCartItems(prev => [...prev, data]) // Sepete yerel olarak da ekle
     setPendingProduct(null) // Modalı kapat
     setToggling(null)
