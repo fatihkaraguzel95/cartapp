@@ -84,6 +84,9 @@ export default function ListPage() {
   const [pendingCount, setPendingCount] = useState(0)                 // Bekleyen değişiklik sayısı
   const userRef = useRef<{ id: string } | null>(null)                 // Online event'te kullanıcıya erişim için
 
+  // Çıkarılan ürünler (bu oturumda kaldırılan, kırmızı bölümde gösterilen)
+  const [removedItems, setRemovedItems] = useState<Map<string, { product: Product; cartItem: ListItem }>>(new Map())
+
   // Özel ürün ekleme modal state'leri
   const [showAddModal, setShowAddModal] = useState(false)    // Modal açık mı?
   const [customName, setCustomName] = useState('')           // Türkçe ürün adı
@@ -300,12 +303,66 @@ export default function ListPage() {
   const handleTileClick = (product: Product) => {
     if (toggling) return
     if (inCart(product.id)) {
+      // Sepetteki ürün tıklandı: kırmızıya al, çıkarılanlar bölümüne ekle
+      const cartItem = cartItems.find(i => i.product_id === product.id)
+      if (cartItem) {
+        setRemovedItems(prev => new Map(prev).set(product.id, { product, cartItem }))
+      }
       removeProduct(product)
     } else {
       setSelectedQuantity(1)
       setSelectedUnit('adet')
       setPendingProduct(product)
     }
+  }
+
+  // --- ÇIKARILANI GERİ EKLE ---
+  const restoreItem = async (productId: string) => {
+    const entry = removedItems.get(productId)
+    if (!entry || !user) return
+    setToggling(productId)
+
+    setRemovedItems(prev => {
+      const next = new Map(prev)
+      next.delete(productId)
+      return next
+    })
+
+    const supabase = getSupabase()
+
+    if (!navigator.onLine) {
+      const tempId = 'offline-' + crypto.randomUUID()
+      const tempItem: ListItem = {
+        id: tempId,
+        list_id: listId,
+        product_id: productId,
+        added_by: user.id,
+        quantity: entry.cartItem.quantity,
+        unit: entry.cartItem.unit,
+        added_at: new Date().toISOString(),
+      }
+      setCartItems(prev => [...prev, tempItem])
+      await addOfflineItem(tempItem).catch(() => {})
+      await addPendingMutation({
+        type: 'add_item',
+        listId,
+        data: { list_id: listId, product_id: productId, added_by: user.id, quantity: entry.cartItem.quantity, unit: entry.cartItem.unit },
+        tempItemId: tempId,
+      }).catch(() => {})
+      setPendingCount(c => c + 1)
+      setToggling(null)
+      return
+    }
+
+    const { data } = await supabase.from('list_items')
+      .insert({ list_id: listId, product_id: productId, added_by: user.id, quantity: entry.cartItem.quantity, unit: entry.cartItem.unit })
+      .select().single()
+
+    if (data) {
+      setCartItems(prev => [...prev, data])
+      await addOfflineItem(data).catch(() => {})
+    }
+    setToggling(null)
   }
 
   // --- ÜRÜNDEN ÇIKAR ---
@@ -457,6 +514,16 @@ export default function ListPage() {
     .map(item => allProducts.find(p => p.id === item.product_id))
     .filter(Boolean) as Product[]
 
+  // Son zamanlarda eklenen ürünler — added_at'e göre azalan, ilk 6
+  const recentlyAddedItems = [...cartItems]
+    .sort((a, b) => new Date(b.added_at).getTime() - new Date(a.added_at).getTime())
+    .slice(0, 6)
+    .map(item => allProducts.find(p => p.id === item.product_id))
+    .filter(Boolean) as Product[]
+
+  // Çıkarılan ürünler listesi
+  const removedList = Array.from(removedItems.values())
+
   // --- YÜKLENİYOR EKRANI ---
   if (loading) {
     return (
@@ -594,6 +661,35 @@ export default function ListPage() {
         ) : (
           /* NORMAL MOD */
           <>
+            {/* SON ZAMANLARDA EKLENENLER */}
+            {recentlyAddedItems.length > 0 && (
+              <div className="mb-5">
+                <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">
+                  Son Eklenenler
+                </h2>
+                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                  {recentlyAddedItems.map(product => {
+                    const cartItem = getCartItem(product.id)
+                    return (
+                      <div
+                        key={product.id}
+                        className="flex-shrink-0 bg-slate-800 border border-slate-700 rounded-2xl px-3 py-2 flex items-center gap-2 min-w-max"
+                      >
+                        <span className="text-2xl">{product.emoji}</span>
+                        <div className="text-left">
+                          <div className="text-xs font-semibold leading-tight">{product.name_tr}</div>
+                          {cartItem && (
+                            <div className="text-xs text-green-400">{cartItem.quantity} {cartItem.unit}</div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* SEPET */}
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
                 Sepet — {cartProducts.length} ürün
@@ -608,7 +704,7 @@ export default function ListPage() {
               )}
             </div>
 
-            {cartProducts.length === 0 ? (
+            {cartProducts.length === 0 && removedList.length === 0 ? (
               <div className="text-center py-16 text-slate-500">
                 <div className="text-6xl mb-4">🛒</div>
                 <p className="font-medium text-slate-400">Sepet boş</p>
@@ -631,6 +727,34 @@ export default function ListPage() {
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 {cartProducts.map(product => <ProductTile key={product.id} product={product} />)}
+              </div>
+            )}
+
+            {/* ÇIKARILANLAR BÖLÜMÜ */}
+            {removedList.length > 0 && (
+              <div className="mt-6">
+                <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">
+                  Çıkarılanlar — {removedList.length} ürün
+                </h2>
+                <div className="grid grid-cols-2 gap-3">
+                  {removedList.map(({ product, cartItem }) => (
+                    <button
+                      key={product.id}
+                      onClick={() => restoreItem(product.id)}
+                      disabled={toggling === product.id}
+                      className="rounded-2xl p-4 text-center flex flex-col items-center gap-2 transition-all border-2 active:scale-95 disabled:opacity-70 bg-red-950 border-red-800"
+                    >
+                      <span className="text-5xl leading-none opacity-60">{product.emoji}</span>
+                      <div className="w-full">
+                        <div className="font-semibold text-sm leading-tight text-red-200 line-through">{product.name_tr}</div>
+                        <div className="text-red-400 text-xs mt-0.5">{product.name_de}</div>
+                      </div>
+                      <span className="text-xs bg-red-800 text-red-200 px-2.5 py-0.5 rounded-full font-medium">
+                        {cartItem.quantity} {cartItem.unit} · geri al
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </>
