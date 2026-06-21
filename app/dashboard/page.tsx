@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
 import { ShoppingList } from '@/types'
+import { saveLists, getLists } from '@/lib/offline-store'
 
 export default function DashboardPage() {
   // --- STATE (Durum Değişkenleri) ---
@@ -36,8 +37,20 @@ export default function DashboardPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null) // Silinecek listenin ID'si (onay için)
   const [showDeleteAccount, setShowDeleteAccount] = useState(false) // Hesap silme onayı
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
+  const [isOnline, setIsOnline] = useState(true) // İnternet bağlantısı durumu
 
   const router = useRouter()
+
+  // Çevrimiçi/çevrimdışı durum takibi
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return
+    setIsOnline(navigator.onLine)
+    const on = () => setIsOnline(true)
+    const off = () => setIsOnline(false)
+    window.addEventListener('online', on)
+    window.addEventListener('offline', off)
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) }
+  }, [])
 
   // --- SAYFA YÜKLENDİĞİNDE ÇALIŞIR ---
   useEffect(() => {
@@ -60,15 +73,25 @@ export default function DashboardPage() {
 
   // --- LİSTELERİ YÜKLE ---
   // Kullanıcının üye olduğu tüm alışveriş listelerini veritabanından çeker.
+  // Çevrimdışıysa önbellekten yükler.
   const loadLists = async (userId: string) => {
     const supabase = getSupabase()
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('shopping_lists')
-      // list_members tablosuyla birleştir: sadece bu kullanıcının üye olduğu listeleri getir
       .select('*, list_members!inner(user_id)')
       .eq('list_members.user_id', userId)
-      .order('created_at', { ascending: false }) // En yeni listeler önce gösterilsin
-    if (data) setLists(data)
+      .order('created_at', { ascending: false })
+
+    if (data) {
+      setLists(data)
+      await saveLists(data).catch(() => {}) // Önbelleğe kaydet
+    } else if (error) {
+      // Ağ hatası veya çevrimdışı: önbellekten yükle
+      const cached = await getLists().catch(() => [])
+      setLists(cached.sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      ))
+    }
   }
 
   // --- YENİ LİSTE OLUŞTUR ---
@@ -222,6 +245,13 @@ export default function DashboardPage() {
   // --- ANA EKRAN ---
   return (
     <div className="min-h-screen bg-slate-950 text-white">
+
+      {/* Çevrimdışı banner */}
+      {!isOnline && (
+        <div className="bg-amber-900 border-b border-amber-700 text-amber-200 text-xs text-center py-2 px-4">
+          Çevrimdışı — listeler önbellekten gösteriliyor
+        </div>
+      )}
 
       {/* Üst bar (header) — ekranda sabit kalır, kaydırmada kaybolmaz */}
       <div className="bg-slate-900 border-b border-slate-800 px-4 py-4 flex items-center justify-between sticky top-0 z-10">

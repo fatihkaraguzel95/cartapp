@@ -12,6 +12,7 @@
 // - Ürünü sepetten çıkar
 // - Yeni özel ürün oluştur
 // - Gerçek zamanlı güncelleme: başka kullanıcı ürün eklediğinde anında yansır
+// - Çevrimdışı destek: internet olmadan verileri göster, değişiklikleri kaydet
 // ============================================================
 
 'use client' // Tarayıcıda çalışır (state, event, realtime subscription kullandığı için)
@@ -20,6 +21,13 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
 import { Product, ShoppingList, ListItem } from '@/types'
+import {
+  saveProducts, getProducts,
+  saveList, getList,
+  saveListItems, getListItems,
+  addOfflineItem, removeOfflineItem,
+  addPendingMutation, getPendingMutations, removePendingMutation,
+} from '@/lib/offline-store'
 
 // --- EMOJİ LİSTESİ ---
 // Özel ürün oluştururken seçilebilecek emojiler.
@@ -71,6 +79,11 @@ export default function ListPage() {
   const [toggling, setToggling] = useState<string | null>(null)       // Şu an işlem yapılan ürünün ID'si
   const searchInputRef = useRef<HTMLInputElement>(null)                // Arama kutusuna programatik odaklanmak için
 
+  // Çevrimdışı durum
+  const [isOnline, setIsOnline] = useState(true)                      // İnternet bağlantısı var mı?
+  const [pendingCount, setPendingCount] = useState(0)                 // Bekleyen değişiklik sayısı
+  const userRef = useRef<{ id: string } | null>(null)                 // Online event'te kullanıcıya erişim için
+
   // Özel ürün ekleme modal state'leri
   const [showAddModal, setShowAddModal] = useState(false)    // Modal açık mı?
   const [customName, setCustomName] = useState('')           // Türkçe ürün adı
@@ -96,83 +109,185 @@ export default function ListPage() {
     return cartItems.some(item => item.product_id === productId)
   }, [cartItems])
 
+  // --- ÇEVRİMDIŞI: BEKLEYEN DEĞİŞİKLİKLERİ SUNUCUYA GÖNDER ---
+  const processOfflineQueue = useCallback(async () => {
+    const supabase = getSupabase()
+    const mutations = await getPendingMutations(listId).catch(() => [])
+    let processed = 0
+
+    for (const mut of mutations) {
+      try {
+        if (mut.type === 'add_item') {
+          const { error } = await supabase.from('list_items').insert(mut.data)
+          // Zaten eklenmişse (duplicate) hata görmezden gel
+          if (!error || error.code === '23505') {
+            await removePendingMutation(mut.id)
+            processed++
+          }
+        } else if (mut.type === 'remove_item') {
+          await supabase.from('list_items').delete()
+            .eq('list_id', mut.data.list_id)
+            .eq('product_id', mut.data.product_id)
+          await removePendingMutation(mut.id)
+          processed++
+        }
+      } catch {
+        // Hata olursa bu değişiklik bir sonraki bağlantıda tekrar denenecek
+      }
+    }
+
+    // Sunucudan güncel veriyi çek
+    const { data: items } = await supabase.from('list_items').select('*').eq('list_id', listId)
+    if (items) {
+      setCartItems(items)
+      await saveListItems(listId, items).catch(() => {})
+    }
+
+    const { data: products } = await supabase.from('products').select('*').order('name_tr')
+    if (products) {
+      setAllProducts(products)
+      await saveProducts(products).catch(() => {})
+    }
+
+    const remaining = mutations.length - processed
+    setPendingCount(Math.max(0, remaining))
+  }, [listId])
+
+  // --- ÇEVRİMİÇİ/ÇEVRİMDIŞI DURUM TAKİBİ ---
+  useEffect(() => {
+    if (typeof navigator === 'undefined') return
+    setIsOnline(navigator.onLine)
+
+    const handleOnline = async () => {
+      setIsOnline(true)
+      if (userRef.current) {
+        await processOfflineQueue()
+      }
+    }
+    const handleOffline = () => setIsOnline(false)
+
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [processOfflineQueue])
+
   // --- SAYFA YÜKLENDİĞİNDE ÇALIŞIR ---
   useEffect(() => {
     const supabase = getSupabase()
     let cleanup: (() => void) | undefined // Sayfa kapanınca realtime aboneliğini temizle
 
     const init = async () => {
-      // Oturum kontrolü
+      // Oturum kontrolü (localStorage'dan okunur — çevrimdışı da çalışır)
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/'); return }
-      const user = session.user
-      setUser(user)
+      const currentUser = session.user
+      setUser(currentUser)
+      userRef.current = currentUser
 
-      // Liste bilgisini yükle
-      const { data: listData } = await supabase
-        .from('shopping_lists').select('*').eq('id', listId).single()
-      if (!listData) { router.push('/dashboard'); return } // Liste bulunamazsa dashboard'a dön
-      setList(listData)
+      const online = typeof navigator !== 'undefined' ? navigator.onLine : true
 
-      // Listedeki üye sayısını yükle
-      const { count } = await supabase
-        .from('list_members').select('*', { count: 'exact', head: true }).eq('list_id', listId)
-      setMemberCount(count || 0)
+      if (online) {
+        // --- ÇEVRİMİÇİ: Sunucudan yükle, IndexedDB'ye kaydet ---
 
-      // Sepetteki ürünleri yükle
-      const { data: items } = await supabase
-        .from('list_items').select('*').eq('list_id', listId)
-      setCartItems(items || [])
+        // Liste bilgisini yükle
+        const { data: listData } = await supabase
+          .from('shopping_lists').select('*').eq('id', listId).single()
 
-      // Tüm ürünleri yükle (arama için gerekli)
-      const { data: products } = await supabase
-        .from('products').select('*').order('name_tr')
-      setAllProducts(products || [])
+        if (listData) {
+          setList(listData)
+          await saveList(listData).catch(() => {})
+        } else {
+          // Sunucuda bulunamazsa önbellekten dene
+          const cached = await getList(listId).catch(() => null)
+          if (!cached) { router.push('/dashboard'); return }
+          setList(cached)
+        }
+
+        // Listedeki üye sayısını yükle
+        const { count } = await supabase
+          .from('list_members').select('*', { count: 'exact', head: true }).eq('list_id', listId)
+        setMemberCount(count || 0)
+
+        // Sepetteki ürünleri yükle
+        const { data: items } = await supabase
+          .from('list_items').select('*').eq('list_id', listId)
+        const serverItems = items || []
+        setCartItems(serverItems)
+        await saveListItems(listId, serverItems).catch(() => {})
+
+        // Tüm ürünleri yükle (arama için gerekli)
+        const { data: products } = await supabase
+          .from('products').select('*').order('name_tr')
+        const serverProducts = products || []
+        setAllProducts(serverProducts)
+        await saveProducts(serverProducts).catch(() => {})
+
+        // Bekleyen çevrimdışı değişiklikleri say
+        const pending = await getPendingMutations(listId).catch(() => [])
+        setPendingCount(pending.length)
+
+        // --- GERÇEK ZAMANLI GÜNCELLEMELER (REALTIME) ---
+        const channel = supabase
+          .channel(`list-${listId}`)
+          .on('postgres_changes', {
+            event: '*',
+            schema: 'public',
+            table: 'list_items',
+            filter: `list_id=eq.${listId}`
+          }, async () => {
+            const { data: refreshed } = await supabase
+              .from('list_items').select('*').eq('list_id', listId)
+            const refreshedItems = refreshed || []
+            setCartItems(refreshedItems)
+            await saveListItems(listId, refreshedItems).catch(() => {})
+          })
+          .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'products'
+          }, async () => {
+            const { data: products } = await supabase
+              .from('products').select('*').order('name_tr')
+            const newProducts = products || []
+            setAllProducts(newProducts)
+            await saveProducts(newProducts).catch(() => {})
+          })
+          .subscribe()
+
+        cleanup = () => { supabase.removeChannel(channel) }
+
+      } else {
+        // --- ÇEVRİMDIŞI: IndexedDB'den yükle ---
+
+        const cachedList = await getList(listId).catch(() => null)
+        if (!cachedList) { router.push('/dashboard'); return }
+        setList(cachedList)
+
+        const cachedItems = await getListItems(listId).catch(() => [])
+        setCartItems(cachedItems)
+
+        const cachedProducts = await getProducts().catch(() => [])
+        setAllProducts(cachedProducts)
+
+        const pending = await getPendingMutations(listId).catch(() => [])
+        setPendingCount(pending.length)
+      }
 
       setLoading(false)
-
-      // --- GERÇEK ZAMANLI GÜNCELLEMELER (REALTIME) ---
-      // Başka bir kullanıcı ürün eklediğinde veya çıkardığında otomatik güncellenir.
-      const channel = supabase
-        .channel(`list-${listId}`) // Her liste için benzersiz bir kanal
-        .on('postgres_changes', {
-          event: '*',            // INSERT, UPDATE, DELETE hepsini dinle
-          schema: 'public',
-          table: 'list_items',
-          filter: `list_id=eq.${listId}` // Sadece bu listedeki değişiklikler
-        }, async () => {
-          // Değişiklik olunca tüm sepet içeriğini yeniden yükle
-          const { data: refreshed } = await supabase
-            .from('list_items').select('*').eq('list_id', listId)
-          setCartItems(refreshed || [])
-        })
-        .on('postgres_changes', {
-          event: 'INSERT', // Yeni ürün eklendiğinde
-          schema: 'public',
-          table: 'products'
-        }, async () => {
-          // Ürün listesini güncelle (yeni özel ürün başkası tarafından eklendiyse)
-          const { data: products } = await supabase
-            .from('products').select('*').order('name_tr')
-          setAllProducts(products || [])
-        })
-        .subscribe()
-
-      // cleanup: bileşen bellekten silindiğinde (sayfa kapatıldığında) kanalı kapat
-      cleanup = () => { supabase.removeChannel(channel) }
     }
 
     init()
-    return () => { cleanup?.() } // React'ın temizleme mekanizması
+    return () => { cleanup?.() }
   }, [listId, router])
 
   // --- ARAMA ---
-  // searchQuery her değiştiğinde bu effect çalışır ve sonuçları filtreler.
   useEffect(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) { setSearchResults([]); return } // Arama kutusu boşsa sonuçları temizle
+    if (!q) { setSearchResults([]); return }
 
-    // Türkçe isim, Almanca isim veya arama terimleri içinde ara
     const results = allProducts.filter(p =>
       p.name_tr.toLowerCase().includes(q) ||
       p.name_de.toLowerCase().includes(q) ||
@@ -182,15 +297,11 @@ export default function ListPage() {
   }, [searchQuery, allProducts])
 
   // --- TILE'A TIKLAMA ---
-  // Ürün kutucuğuna tıklandığında:
-  // - Sepetteyse: direkt çıkar
-  // - Sepette değilse: miktar/birim seçim modalını aç
   const handleTileClick = (product: Product) => {
-    if (toggling) return // Başka bir işlem varsa bekle
+    if (toggling) return
     if (inCart(product.id)) {
       removeProduct(product)
     } else {
-      // Modalı açmadan önce varsayılan değerlere sıfırla
       setSelectedQuantity(1)
       setSelectedUnit('adet')
       setPendingProduct(product)
@@ -199,23 +310,84 @@ export default function ListPage() {
 
   // --- ÜRÜNDEN ÇIKAR ---
   const removeProduct = async (product: Product) => {
-    setToggling(product.id) // Bu ürünün işlem yaptığını işaretle (çift tıklamayı engeller)
+    setToggling(product.id)
     const supabase = getSupabase()
+    const cartItem = cartItems.find(i => i.product_id === product.id)
+
+    if (!navigator.onLine) {
+      // Çevrimdışı mod
+      if (cartItem) {
+        if (cartItem.id.startsWith('offline-')) {
+          // Çevrimdışı eklenen ürün: sıradan ilgili add_item mutasyonunu sil
+          const mutations = await getPendingMutations(listId).catch(() => [])
+          const addMut = mutations.find(m => m.type === 'add_item' && m.tempItemId === cartItem.id)
+          if (addMut) {
+            await removePendingMutation(addMut.id).catch(() => {})
+            setPendingCount(c => Math.max(0, c - 1))
+          }
+        } else {
+          // Sunucuda kayıtlı ürün: remove_item sıraya al
+          await addPendingMutation({
+            type: 'remove_item',
+            listId,
+            data: { list_id: listId, product_id: product.id },
+          }).catch(() => {})
+          setPendingCount(c => c + 1)
+        }
+        await removeOfflineItem(cartItem.id).catch(() => {})
+      }
+      setCartItems(prev => prev.filter(i => i.product_id !== product.id))
+      setToggling(null)
+      return
+    }
+
+    // Çevrimiçi mod
     await supabase.from('list_items').delete()
       .eq('list_id', listId).eq('product_id', product.id)
-    // Sepetten çıkarılanı yerel state'den de sil (sayfayı yeniden yüklemeden)
     setCartItems(prev => prev.filter(item => item.product_id !== product.id))
+    if (cartItem) await removeOfflineItem(cartItem.id).catch(() => {})
     setToggling(null)
   }
 
   // --- SEPETE EKLE (MİKTAR/BİRİM İLE) ---
-  // Kullanıcı miktar/birim seçip onayladıktan sonra bu fonksiyon çalışır.
   const confirmAddToCart = async () => {
     if (!pendingProduct || !user) return
     setToggling(pendingProduct.id)
     const supabase = getSupabase()
 
-    // Veritabanına ekle: liste ID, ürün ID, kimin eklediği, miktar, birim
+    if (!navigator.onLine) {
+      // Çevrimdışı mod: geçici ID ile yerel kayıt oluştur, sıraya al
+      const tempId = 'offline-' + crypto.randomUUID()
+      const tempItem: ListItem = {
+        id: tempId,
+        list_id: listId,
+        product_id: pendingProduct.id,
+        added_by: user.id,
+        quantity: selectedQuantity,
+        unit: selectedUnit,
+        added_at: new Date().toISOString(),
+      }
+      setCartItems(prev => [...prev, tempItem])
+      await addOfflineItem(tempItem).catch(() => {})
+      await addPendingMutation({
+        type: 'add_item',
+        listId,
+        data: {
+          list_id: listId,
+          product_id: pendingProduct.id,
+          added_by: user.id,
+          quantity: selectedQuantity,
+          unit: selectedUnit,
+        },
+        tempItemId: tempId,
+      }).catch(() => {})
+      setPendingCount(c => c + 1)
+      setPendingProduct(null)
+      setToggling(null)
+      return
+    }
+
+    // Çevrimiçi mod
     const { data, error } = await supabase.from('list_items')
       .insert({
         list_id: listId,
@@ -224,32 +396,32 @@ export default function ListPage() {
         quantity: selectedQuantity,
         unit: selectedUnit,
       })
-      .select().single() // Eklenen kaydı geri al
+      .select().single()
 
     if (error) alert('Hata: ' + error.message + ' | ' + error.code)
-    if (data) setCartItems(prev => [...prev, data]) // Sepete yerel olarak da ekle
-    setPendingProduct(null) // Modalı kapat
+    if (data) {
+      setCartItems(prev => [...prev, data])
+      await addOfflineItem(data).catch(() => {})
+    }
+    setPendingProduct(null)
     setToggling(null)
   }
 
   // --- ÖZEL ÜRÜN EKLE ---
-  // Veritabanında olmayan bir ürünü kullanıcı kendisi oluşturabilir.
-  // Bu ürün "products" tablosuna eklenir ve kalıcı olur (herkes görebilir).
   const addCustomProduct = async () => {
     if (!customName.trim() || !user) return
     setAddingCustom(true)
     const supabase = getSupabase()
 
-    // Ürünü products tablosuna ekle
     const { data: product, error } = await supabase
       .from('products')
       .insert({
         name_tr: customName.trim(),
-        name_de: customNameDe.trim() || customName.trim(), // Almanca boşsa Türkçe'yi kullan
-        category: 'ozel',    // Özel kategori
+        name_de: customNameDe.trim() || customName.trim(),
+        category: 'ozel',
         emoji: customEmoji,
-        is_custom: true,     // Kullanıcı tarafından oluşturuldu
-        created_by: user.id, // Kim oluşturdu
+        is_custom: true,
+        created_by: user.id,
       })
       .select().single()
 
@@ -258,24 +430,21 @@ export default function ListPage() {
       return
     }
 
-    // Yeni ürünü yerel ürün listesine ekle (realtime gelene kadar anında görünsün)
     setAllProducts(prev => [...prev, product])
+    await saveProducts([product]).catch(() => {})
 
-    // Formu sıfırla ve modalı kapat
     setCustomName('')
     setCustomNameDe('')
     setCustomEmoji('🛒')
     setShowAddModal(false)
     setAddingCustom(false)
 
-    // Özel ürün için de miktar/birim seçim modalını aç
     setSelectedQuantity(1)
     setSelectedUnit('adet')
     setPendingProduct(product)
   }
 
   // --- KODU KOPYALA ---
-  // Katılma kodunu panoya kopyalar ve 2 saniye "Kopyalandı!" gösterir.
   const copyCode = async () => {
     if (!list) return
     try { await navigator.clipboard.writeText(list.join_code) } catch { }
@@ -284,7 +453,6 @@ export default function ListPage() {
   }
 
   // Sepetteki ürünlerin tam bilgisini (emoji, isim vb.) getir
-  // cartItems sadece ID'leri tutar, allProducts'tan tam bilgiyi bul
   const cartProducts = cartItems
     .map(item => allProducts.find(p => p.id === item.product_id))
     .filter(Boolean) as Product[]
@@ -298,35 +466,27 @@ export default function ListPage() {
     )
   }
 
-  // Arama yapılıyor mu? (arama kutusu dolu mu?)
   const isSearching = searchQuery.trim().length > 0
 
   // --- ÜRÜN TILE BİLEŞENİ ---
-  // Her ürün için gösterilen kutucuk.
-  // Sepetteyse yeşil + miktar/birim, değilse gri + "Ekle" gösterir.
   const ProductTile = ({ product }: { product: Product }) => {
     const cartItem = getCartItem(product.id)
     const isInCart = !!cartItem
     return (
       <button
         onClick={() => handleTileClick(product)}
-        disabled={toggling === product.id} // İşlem yapılırken buton devre dışı
+        disabled={toggling === product.id}
         className={`rounded-2xl p-4 text-center flex flex-col items-center gap-2 transition-all border-2 active:scale-95 disabled:opacity-70 ${
           isInCart
-            ? 'bg-green-950 border-green-600'  // Sepetteyse yeşil
-            : 'bg-slate-800 border-slate-700'  // Değilse gri
+            ? 'bg-green-950 border-green-600'
+            : 'bg-slate-800 border-slate-700'
         }`}
       >
-        {/* Büyük emoji */}
         <span className="text-5xl leading-none">{product.emoji}</span>
-
-        {/* Ürün adları */}
         <div className="w-full">
           <div className="font-semibold text-sm leading-tight">{product.name_tr}</div>
           <div className="text-slate-400 text-xs mt-0.5">{product.name_de}</div>
         </div>
-
-        {/* Durum etiketi: sepetteyse miktar+birim, değilse "+Ekle" */}
         {isInCart ? (
           <span className="text-xs bg-green-600 text-white px-2.5 py-0.5 rounded-full font-medium">
             ✓ {cartItem.quantity} {cartItem.unit}
@@ -342,30 +502,34 @@ export default function ListPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-white pb-10">
 
+      {/* Çevrimdışı banner */}
+      {!isOnline && (
+        <div className="bg-amber-900 border-b border-amber-700 text-amber-200 text-xs text-center py-2 px-4">
+          {pendingCount > 0
+            ? `Çevrimdışı — ${pendingCount} değişiklik bağlantı gelince gönderilecek`
+            : 'Çevrimdışı — önbellekten gösteriliyor'}
+        </div>
+      )}
+
       {/* Üst bar — ekranda sabit kalır */}
       <div className="bg-slate-900 border-b border-slate-800 sticky top-0 z-20">
         <div className="px-4 pt-3 pb-2 flex items-center gap-3">
 
-          {/* Geri butonu */}
           <button onClick={() => router.push('/dashboard')} className="text-slate-400 text-2xl w-8 flex-shrink-0">←</button>
 
           <div className="flex-1 min-w-0">
-            {/* Liste adı */}
             <h1 className="font-bold text-base leading-tight truncate">{list?.name}</h1>
             <div className="flex items-center gap-3 mt-0.5">
-              {/* Katılma kodu butonu — tıklanınca panoya kopyalar */}
               <button
                 onClick={copyCode}
                 className="text-xs bg-slate-800 rounded-lg px-2.5 py-1 font-mono tracking-widest text-slate-300 active:scale-95 transition-all"
               >
                 {copied ? '✓ Kopyalandı!' : list?.join_code}
               </button>
-              {/* Üye sayısı */}
               <span className="text-xs text-slate-500">👥 {memberCount} kişi</span>
             </div>
           </div>
 
-          {/* Yeni özel ürün ekleme butonu */}
           <button
             onClick={() => setShowAddModal(true)}
             className="bg-green-700 text-white rounded-xl px-3 py-2 text-sm font-bold flex-shrink-0 active:scale-95 transition-all"
@@ -386,7 +550,6 @@ export default function ListPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-slate-800 rounded-2xl pl-10 pr-10 py-3.5 text-sm outline-none focus:ring-2 focus:ring-green-500 placeholder-slate-500"
             />
-            {/* Temizle butonu — arama kutusu doluysa göster */}
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
@@ -399,14 +562,13 @@ export default function ListPage() {
 
       <div className="p-4 max-w-lg mx-auto">
 
-        {/* ARAMA MODU: Kullanıcı bir şey yazıyorsa arama sonuçlarını göster */}
+        {/* ARAMA MODU */}
         {isSearching ? (
           <>
             <div className="flex items-center justify-between mb-3">
               <p className="text-slate-500 text-xs">
                 {searchResults.length === 0 ? 'Sonuç yok' : `${searchResults.length} ürün bulundu`}
               </p>
-              {/* Sonuç yoksa "bu isimle ekle" butonu göster */}
               {searchResults.length === 0 && (
                 <button
                   onClick={() => { setCustomName(searchQuery); setShowAddModal(true) }}
@@ -418,13 +580,11 @@ export default function ListPage() {
             </div>
 
             {searchResults.length === 0 ? (
-              // Hiç sonuç yok
               <div className="text-center py-10 text-slate-500">
                 <div className="text-4xl mb-3">🔍</div>
                 <p>Listede yok — yukarıdan ekleyebilirsin</p>
               </div>
             ) : (
-              // Arama sonuçlarını 2 sütunlu grid olarak göster
               <div className="grid grid-cols-2 gap-3">
                 {searchResults.map(product => <ProductTile key={product.id} product={product} />)}
               </div>
@@ -432,16 +592,15 @@ export default function ListPage() {
           </>
 
         ) : (
-          /* NORMAL MOD: Arama yapılmıyorsa sepetteki ürünleri göster */
+          /* NORMAL MOD */
           <>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
                 Sepet — {cartProducts.length} ürün
               </h2>
-              {/* Sepet doluysa "ürün ekle" bağlantısı göster */}
               {cartProducts.length > 0 && (
                 <button
-                  onClick={() => searchInputRef.current?.focus()} // Arama kutusuna odaklan
+                  onClick={() => searchInputRef.current?.focus()}
                   className="text-xs text-green-400 font-medium"
                 >
                   + Ürün ekle
@@ -450,7 +609,6 @@ export default function ListPage() {
             </div>
 
             {cartProducts.length === 0 ? (
-              // Sepet boş
               <div className="text-center py-16 text-slate-500">
                 <div className="text-6xl mb-4">🛒</div>
                 <p className="font-medium text-slate-400">Sepet boş</p>
@@ -471,7 +629,6 @@ export default function ListPage() {
                 </div>
               </div>
             ) : (
-              // Sepetteki ürünleri 2 sütunlu grid olarak göster
               <div className="grid grid-cols-2 gap-3">
                 {cartProducts.map(product => <ProductTile key={product.id} product={product} />)}
               </div>
@@ -482,24 +639,19 @@ export default function ListPage() {
 
       {/* ============================================================ */}
       {/* MİKTAR/BİRİM SEÇİM MODALI */}
-      {/* Ürüne tıklandığında açılır, kullanıcı kaç tane ve hangi birimde */}
-      {/* alacağını seçer, sonra sepete eklenir. */}
       {/* ============================================================ */}
       {pendingProduct && (
-        // Arka plan — tıklanınca modalı kapat
         <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center" onClick={() => setPendingProduct(null)}>
           <div
             className="bg-slate-900 rounded-t-3xl w-full max-w-lg p-5 pb-8"
-            onClick={e => e.stopPropagation()} // Modal içine tıklayınca kapanmasın
+            onClick={e => e.stopPropagation()}
           >
-            {/* Ürün bilgisi */}
             <div className="flex items-center gap-3 mb-5">
               <span className="text-5xl">{pendingProduct.emoji}</span>
               <div>
                 <div className="font-bold text-base">{pendingProduct.name_tr}</div>
                 <div className="text-slate-400 text-sm">{pendingProduct.name_de}</div>
               </div>
-              {/* Kapat butonu */}
               <button onClick={() => setPendingProduct(null)} className="ml-auto text-slate-400 text-2xl w-8 h-8 flex items-center justify-center">×</button>
             </div>
 
@@ -507,22 +659,15 @@ export default function ListPage() {
             <div className="mb-4">
               <p className="text-slate-400 text-xs mb-2 font-medium uppercase tracking-wider">Miktar</p>
               <div className="flex items-center gap-4">
-                {/* Azalt butonu */}
                 <button
-                  onClick={() => setSelectedQuantity(q => Math.max(1, q - 1))} // Minimum 1
+                  onClick={() => setSelectedQuantity(q => Math.max(1, q - 1))}
                   className="w-12 h-12 rounded-2xl bg-slate-800 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all"
                 >−</button>
-
-                {/* Mevcut miktar */}
                 <span className="text-3xl font-bold w-12 text-center">{selectedQuantity}</span>
-
-                {/* Artır butonu */}
                 <button
-                  onClick={() => setSelectedQuantity(q => Math.min(99, q + 1))} // Maksimum 99
+                  onClick={() => setSelectedQuantity(q => Math.min(99, q + 1))}
                   className="w-12 h-12 rounded-2xl bg-slate-800 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all"
                 >+</button>
-
-                {/* Hızlı miktar seçenekleri */}
                 <div className="flex gap-2 flex-wrap ml-2">
                   {[1, 2, 3, 5, 10].map(n => (
                     <button
@@ -553,7 +698,6 @@ export default function ListPage() {
               </div>
             </div>
 
-            {/* Sepete ekle butonu */}
             <button
               onClick={confirmAddToCart}
               disabled={!!toggling}
@@ -567,7 +711,6 @@ export default function ListPage() {
 
       {/* ============================================================ */}
       {/* ÖZEL ÜRÜN EKLEME MODALI */}
-      {/* Veritabanında olmayan bir ürünü kullanıcı kendisi oluşturabilir. */}
       {/* ============================================================ */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-end justify-center" onClick={() => setShowAddModal(false)}>
@@ -584,10 +727,7 @@ export default function ListPage() {
             <div className="mb-4">
               <p className="text-slate-400 text-xs mb-2 font-medium">Simge Seç</p>
               <div className="flex items-center gap-3 mb-2">
-                {/* Seçili emoji büyük göster */}
                 <span className="text-5xl">{customEmoji}</span>
-
-                {/* Kaydırılabilir emoji grid */}
                 <div className="flex-1 bg-slate-800 rounded-xl p-2 max-h-36 overflow-y-auto">
                   <div className="grid grid-cols-8 gap-1">
                     {EMOJIS.map(e => (
@@ -625,7 +765,6 @@ export default function ListPage() {
               />
             </div>
 
-            {/* Devam et butonu — miktar/birim seçimine geçer */}
             <button
               onClick={addCustomProduct}
               disabled={!customName.trim() || addingCustom}
